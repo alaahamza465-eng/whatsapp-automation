@@ -1,0 +1,17 @@
+{
+  "n8n_url": "https://n8n.example.com",
+  "timezone": "Asia/Riyadh",
+  "verify_token": "auto",
+  "whatsapp_credential_id": "",
+  "notify_workflow_id": "",
+  "tables": {
+    "contacts": "",
+    "settings": "",
+    "messages": "",
+    "log": "",
+    "chats": "",
+    "campaigns": "",
+    "notes": "",
+    "push": ""
+  }
+}
