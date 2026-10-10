@@ -1,0 +1,1696 @@
+{
+ "name": "WhatsApp Automation — المستقبل",
+ "nodes": [
+  {
+   "id": "50648343-3142-44fd-8f27-969da1527de5",
+   "name": "Meta Verify (GET)",
+   "type": "n8n-nodes-base.webhook",
+   "typeVersion": 2,
+   "position": [
+    -2320,
+    -592
+   ],
+   "parameters": {
+    "httpMethod": "GET",
+    "path": "whatsapp-controller",
+    "responseMode": "responseNode",
+    "options": {}
+   },
+   "webhookId": "6b87c3cf-419e-4940-914c-1e2210194d6f"
+  },
+  {
+   "id": "28cf9990-126a-4774-a542-8f412d7bb9ed",
+   "name": "Verify",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    -2112,
+    -592
+   ],
+   "parameters": {
+    "jsCode": "// تأكيد ربط الـ Webhook مع Meta\n// غيّر هاد النص، وحط نفس النص بخانة Verify token بإعدادات تطبيق Meta\nconst VERIFY_TOKEN = '__VERIFY_TOKEN__';\nconst q = ($json.query) || {};\nconst ok = q['hub.mode'] === 'subscribe' && q['hub.verify_token'] === VERIFY_TOKEN;\nreturn { json: { ok, body: ok ? String(q['hub.challenge'] || '') : 'forbidden', code: ok ? 200 : 403 } };\n",
+    "mode": "runOnceForEachItem"
+   }
+  },
+  {
+   "id": "604f3089-c30e-43aa-affa-fb18cf8de585",
+   "name": "Respond",
+   "type": "n8n-nodes-base.respondToWebhook",
+   "typeVersion": 1.1,
+   "position": [
+    -1888,
+    -592
+   ],
+   "parameters": {
+    "respondWith": "text",
+    "responseBody": "={{ $json.body }}",
+    "options": {
+     "responseCode": "={{ $json.code }}"
+    }
+   }
+  },
+  {
+   "id": "a7d6e20c-1147-4f29-a122-ae1a46c54be4",
+   "name": "WhatsApp Events (POST)",
+   "type": "n8n-nodes-base.webhook",
+   "typeVersion": 2,
+   "position": [
+    -2320,
+    -288
+   ],
+   "parameters": {
+    "httpMethod": "POST",
+    "path": "whatsapp-controller",
+    "options": {}
+   },
+   "webhookId": "ead951c8-4ad9-45ad-a638-b3904ed56a34"
+  },
+  {
+   "id": "632d4477-f9c7-4b8c-b836-d52a5e8c0db7",
+   "name": "Config",
+   "type": "n8n-nodes-base.noOp",
+   "typeVersion": 1,
+   "position": [
+    -2112,
+    -288
+   ],
+   "parameters": {}
+  },
+  {
+   "id": "4d10a31e-5c0a-43d7-a059-6c16aac661b8",
+   "name": "Parse Events",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    -1888,
+    -288
+   ],
+   "parameters": {
+    "jsCode": "// تفكيك أحداث واتساب: حالات الرسائل + ردود الناس + نتائج مراجعة الرسائل\nconst S = {};\nfor (const it of $('Read Settings P').all()) { const r = it.json; if (r.key) S[String(r.key).trim()] = r.value; }\nconst OUR_PHONE = String(S.phone_number_id || '').trim(); // رقم الحملة (من الإعدادات العامة)\nconst OUR_WABA = String(S.waba_id || '').trim(); // حساب واتساب للأعمال (لموافقات الرسائل)\nconst out = [];\nfor (const it of $('WhatsApp Events (POST)').all()) {\n  const body = it.json.body || it.json;\n  for (const e of (body.entry || [])) {\n    for (const ch of (e.changes || [])) {\n      if (ch.field === 'message_template_status_update' && String(e.id || '') === OUR_WABA) {\n        const t = ch.value || {};\n        if (t.message_template_id) out.push({ json: { kind: 'tpl', template_id: String(t.message_template_id), status: String(t.event || '').toUpperCase(),\n          reason: String(t.reason || '') === 'NONE' ? '' : String(t.reason || '') } });\n        continue;\n      }\n      if (ch.field !== 'messages') continue;\n      const v = ch.value || {};\n      if (String((v.metadata || {}).phone_number_id || '') !== OUR_PHONE) continue; // حدث مش من رقمنا: بنتجاهله\n      for (const s of (v.statuses || [])) {\n        const er = (s.errors && s.errors[0]) || {};\n        out.push({ json: { kind: 'status', wamid: s.id, status: s.status, recipient: s.recipient_id || '', ts: Number(s.timestamp) || 0,\n          error_code: er.code || '', error_title: er.title || er.message || '' } });\n      }\n      for (const m of (v.messages || [])) {\n        let text = '', payload = '';\n        if (m.type === 'text') text = (m.text && m.text.body) || '';\n        else if (m.type === 'button') { text = (m.button && m.button.text) || ''; payload = (m.button && m.button.payload) || ''; }\n        else if (m.type === 'interactive') {\n          const r = (m.interactive && (m.interactive.button_reply || m.interactive.list_reply)) || {};\n          text = r.title || ''; payload = r.id || '';\n        } else { const md = m[m.type] || {}; text = '[' + m.type + ']' + (md.caption ? ' ' + md.caption : (md.filename ? ' ' + md.filename : '')); }\n        const prof = ((v.contacts || []).find(x => x.wa_id === m.from) || (v.contacts || [])[0] || {}).profile || {};\n        out.push({ json: { kind: 'message', from: String(m.from || ''), text, payload, id: String(m.id || ''), ts: Number(m.timestamp) || 0, profile: String(prof.name || '') } });\n      }\n    }\n  }\n}\nreturn out;\n"
+   }
+  },
+  {
+   "id": "bb9cca64-eae4-4b3d-a8f0-09bccb6dbf50",
+   "name": "Is Status?",
+   "type": "n8n-nodes-base.if",
+   "typeVersion": 2,
+   "position": [
+    -1664,
+    -288
+   ],
+   "parameters": {
+    "conditions": {
+     "options": {
+      "caseSensitive": true,
+      "leftValue": "",
+      "typeValidation": "strict"
+     },
+     "conditions": [
+      {
+       "id": "0ae4cab5-b4ce-46ca-ab04-79685e8454ed",
+       "leftValue": "={{ $json.kind }}",
+       "rightValue": "status",
+       "operator": {
+        "type": "string",
+        "operation": "equals"
+       }
+      }
+     ],
+     "combinator": "and"
+    },
+    "options": {}
+   }
+  },
+  {
+   "id": "c72064ef-71c7-4694-8de9-8409646cb143",
+   "name": "Map Status",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    -1424,
+    -560
+   ],
+   "parameters": {
+    "jsCode": "// تحويل حالة الرسالة (وصلت / انقرت / فشلت) لسطر بالجدول، مع وقتها\nconst S = {};\nfor (const it of $('Read Settings P').all()) { const r = it.json; if (r.key) S[String(r.key).trim()] = r.value; }\nconst num = (v, d) => { const n = Number(v); return (v === '' || v === null || v === undefined || isNaN(n)) ? d : n; };\nconst now = $now.setZone('__TIMEZONE__');\nconst primary = String(S.primary_cc || '').replace(/\\D/g, '');\nconst PS = primary === '970' || primary === '972'; // بس بفلسطين في مفتاح ثاني نجربه\nconst out = [];\nfor (const it of $input.all()) {\n  const s = it.json;\n  if (!s.wamid || s.status === 'sent') continue; // \"sent\" مسجلة من الإرسال\n  const t = Number(s.ts) ? DateTime.fromSeconds(Number(s.ts)).setZone('__TIMEZONE__') : now;\n  const at = t.toFormat('yyyy-MM-dd HH:mm');\n  const o = { wamid: String(s.wamid), st: s.status, at, updated_at: now.toFormat('yyyy-MM-dd HH:mm'), error_code: String(s.error_code || ''), retry_after: '', notes: '' };\n  if (s.status === 'failed') {\n    const code = Number(s.error_code);\n    o.notes = String(s.error_title || '').slice(0, 250);\n    if (code === 131026) o.delivery = PS && String(s.recipient || '').startsWith(primary) ? 'retry_alt' : 'no_whatsapp'; // جرّب المفتاح الثاني قبل ما نحكم إنه ما عنده واتساب\n    else if (code === 131049) { // حد ميتا لرسائل التسويق لكل شخص: ميتا بتطلب نستنى 24 ساعة على الأقل، وإلا بيتسكر أكتر\n      o.delivery = 'retry_later';\n      o.retry_after = now.plus({ hours: Math.max(24, num(S.cap_retry_hours, 25)) }).toFormat('yyyy-MM-dd HH:mm');\n    } else if ([130472, 130429, 131056].includes(code)) {\n      o.delivery = 'retry_later';\n      o.retry_after = now.plus({ days: num(S.retry_days, 3) }).toFormat('yyyy-MM-dd');\n    } else o.delivery = 'failed';\n  } else if (s.status === 'delivered' || s.status === 'read') {\n    o.delivery = s.status;\n  } else continue;\n  out.push({ json: o });\n}\nreturn out;\n"
+   }
+  },
+  {
+   "id": "2ed21a7e-6921-4994-b6aa-d908b57258d3",
+   "name": "Classify",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    -976,
+    -144
+   ],
+   "parameters": {
+    "jsCode": "// تصنيف رد الشخص (مهتم / مش مهتم / رد عادي) وتحديد أي حملة بيرد عليها\nconst last9 = p => String(p || '').replace(/\\D/g, '').slice(-9);\nconst S = {};\nfor (const it of $('Read Settings P').all()) { const r = it.json; if (r.key) S[String(r.key).trim()] = r.value; }\nconst words = (v, d) => String(v ?? d).split(/[,،\\n]+/).map(w => w.trim().toLowerCase()).filter(Boolean);\nconst YES = words(S.yes_words, 'نعم,اه,آه,ايوا,أيوا,ايوه,بدي,اكيد,أكيد,تمام,بدي التفاصيل');\nconst NO = words(S.stop_words, 'مش مهتم,مو مهتم,غير مهتم,لا شكرا,الغاء,إلغاء,توقف,stop');\nconst camps = {};\nfor (const it of $('Read Campaigns R').all()) { const c = it.json; if (c.cid) camps[String(c.cid)] = c; }\nconst by9 = new Map();\nfor (const it of $('Read Contacts R').all()) {\n  const c = it.json;\n  for (const k of new Set([last9(c.phone), last9(c.wa_id)])) {\n    if (!k) continue;\n    if (!by9.has(k)) by9.set(k, new Map());\n    by9.get(k).set(c.id, c);\n  }\n}\nconst stamp = $now.setZone('__TIMEZONE__').toFormat('yyyy-MM-dd HH:mm');\nconst out = [];\nfor (const it of $('Parse Events').all()) {\n  const m = it.json;\n  if (m.kind !== 'message' || !m.from) continue;\n  const rows = [...((by9.get(last9(m.from)) || new Map()).values())];\n  if (!rows.length) continue; // مش من القائمة: تنبيهه بيطلع من صندوق المحادثات\n  const raw = String(m.payload || '').trim();\n  const [pk, pc] = raw.split('|');\n  const latest = rows.slice().sort((a, b) => String(b.sent_at || '').localeCompare(String(a.sent_at || '')))[0];\n  let row = pc ? rows.find(r => String(r.campaign || '') === pc) : null;\n  let cid = row ? String(row.campaign || '') : (pc && camps[pc] ? pc : String(latest.campaign || ''));\n  if (!row) row = (pc && camps[pc]) ? { ...latest, response: '' } : latest; // رسالة تجربة لحملة ما فيها الرقم\n  const t = String(m.text || '').trim();\n  const p = String(pk || '').toUpperCase();\n  let response = 'replied';\n  const tl = t.toLowerCase();\n  const starts = w => tl === w || (tl.startsWith(w) && !/[\\u0600-\\u06FFa-z0-9]/i.test(tl.charAt(w.length))); // كلمة كاملة بأول الرد\n  if (p === 'INTERESTED' || YES.some(starts)) response = 'interested';\n  if (p === 'STOP' || NO.some(w => tl.includes(w)) || /^لا[\\s.!]*$/.test(t)) response = 'opted_out';\n  const prev = String(row.response || '').trim();\n  if (response === 'replied' && (prev === 'interested' || prev === 'opted_out')) response = prev; // ما بننزّل الحالة\n  out.push({ json: {\n    phone: String(row.phone || ''),\n    campaign: cid,\n    campaign_name: String((camps[cid] || {}).name || ''),\n    name: String(row.name || ''),\n    kind: raw ? 'button' : 'text',\n    wa_id: String(m.from),\n    response,\n    reply: t.slice(0, 300),\n    updated_at: stamp,\n    last_in_at: stamp, // كتبلنا: نافذة 24 ساعة انفتحت، فرسائلنا بتوصله أكيد\n    auto_reply: prev !== response && (response === 'interested' || response === 'opted_out')\n  } });\n}\nreturn out;\n"
+   }
+  },
+  {
+   "id": "8a83d2d2-25d3-4ae5-8bb9-b17552835125",
+   "name": "Update Response",
+   "type": "n8n-nodes-base.dataTable",
+   "typeVersion": 1,
+   "position": [
+    -768,
+    -144
+   ],
+   "parameters": {
+    "resource": "row",
+    "operation": "update",
+    "dataTableId": {
+     "__rl": true,
+     "value": "__TABLE_CONTACTS__",
+     "mode": "id",
+     "cachedResultName": "Contacts"
+    },
+    "columns": {
+     "mappingMode": "defineBelow",
+     "value": {
+      "wa_id": "={{ ($json.wa_id) == null ? '' : String($json.wa_id) }}",
+      "response": "={{ ($json.response) == null ? '' : String($json.response) }}",
+      "reply": "={{ ($json.reply) == null ? '' : String($json.reply) }}",
+      "updated_at": "={{ ($json.updated_at) == null ? '' : String($json.updated_at) }}",
+      "last_in_at": "={{ ($json.last_in_at) == null ? '' : String($json.last_in_at) }}"
+     },
+     "matchingColumns": [],
+     "schema": [
+      {
+       "id": "wa_id",
+       "displayName": "wa_id",
+       "required": false,
+       "defaultMatch": false,
+       "display": true,
+       "type": "string",
+       "readOnly": false,
+       "removed": false
+      },
+      {
+       "id": "response",
+       "displayName": "response",
+       "required": false,
+       "defaultMatch": false,
+       "display": true,
+       "type": "string",
+       "readOnly": false,
+       "removed": false
+      },
+      {
+       "id": "reply",
+       "displayName": "reply",
+       "required": false,
+       "defaultMatch": false,
+       "display": true,
+       "type": "string",
+       "readOnly": false,
+       "removed": false
+      },
+      {
+       "id": "updated_at",
+       "displayName": "updated_at",
+       "required": false,
+       "defaultMatch": false,
+       "display": true,
+       "type": "string",
+       "readOnly": false,
+       "removed": false
+      },
+      {
+       "id": "last_in_at",
+       "displayName": "last_in_at",
+       "required": false,
+       "defaultMatch": false,
+       "display": true,
+       "type": "string",
+       "readOnly": false,
+       "removed": false
+      }
+     ],
+     "attemptToConvertTypes": false,
+     "convertFieldsToString": false
+    },
+    "options": {},
+    "matchType": "allConditions",
+    "filters": {
+     "conditions": [
+      {
+       "keyName": "phone",
+       "condition": "eq",
+       "keyValue": "={{ ($json.phone) == null ? '' : String($json.phone) }}"
+      },
+      {
+       "keyName": "campaign",
+       "condition": "eq",
+       "keyValue": "={{ ($json.campaign) == null ? '' : String($json.campaign) }}"
+      }
+     ]
+    }
+   },
+   "onError": "continueRegularOutput",
+   "alwaysOutputData": true
+  },
+  {
+   "id": "f189b4dc-fcc7-4762-b059-a182fcb343d8",
+   "name": "Read Settings",
+   "type": "n8n-nodes-base.dataTable",
+   "typeVersion": 1,
+   "position": [
+    -544,
+    -144
+   ],
+   "parameters": {
+    "resource": "row",
+    "operation": "get",
+    "dataTableId": {
+     "__rl": true,
+     "value": "__TABLE_SETTINGS__",
+     "mode": "id",
+     "cachedResultName": "Settings"
+    },
+    "returnAll": true
+   },
+   "executeOnce": true
+  },
+  {
+   "id": "bf1ec0b4-16a9-47f5-b0a2-f091d0e0e427",
+   "name": "Build Reply",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    -320,
+    -144
+   ],
+   "parameters": {
+    "jsCode": "// الرد التلقائي لكل حملة (مجاني لأنه جوا نافذة الـ24 ساعة بعد رد الشخص)\nconst S = {};\nfor (const it of $('Read Settings').all()) { const r = it.json; if (r.key) S[String(r.key).trim()] = r.value; }\nconst camps = {};\nfor (const it of $('Read Campaigns R').all()) { const c = it.json; if (c.cid) camps[String(c.cid)] = c; }\nconst v = String(S.api_version || 'v23.0').trim();\nconst id = String(S.phone_number_id || '').trim();\nconst out = [];\nfor (const it of $('Classify').all()) {\n  const c = it.json;\n  if (!c.auto_reply || !id) continue;\n  const cp = camps[c.campaign] || {};\n  const text = c.response === 'interested' ? (cp.interested_reply || S.interested_reply) : (cp.optout_reply || S.optout_reply);\n  if (!String(text || '').trim()) continue;\n  out.push({ json: { campaign: c.campaign, url: `https://graph.facebook.com/${v}/${id}/messages`,\n    payload: { messaging_product: 'whatsapp', to: String(c.wa_id), type: 'text', text: { body: String(text) } } } });\n}\nreturn out;\n"
+   }
+  },
+  {
+   "id": "fa9e1cce-c333-450f-a691-db069c13f746",
+   "name": "Send Reply",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4.2,
+   "position": [
+    -96,
+    -144
+   ],
+   "parameters": {
+    "method": "POST",
+    "url": "={{ $json.url }}",
+    "authentication": "genericCredentialType",
+    "genericAuthType": "httpHeaderAuth",
+    "options": {
+     "response": {
+      "response": {
+       "neverError": true
+      }
+     }
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{ JSON.stringify($json.payload) }}"
+   },
+   "onError": "continueRegularOutput",
+   "credentials": {
+    "httpHeaderAuth": {
+     "id": "__WHATSAPP_CREDENTIAL_ID__",
+     "name": "WhatsApp Token"
+    }
+   }
+  },
+  {
+   "id": "a9a0e5c4-8b72-47f1-b46b-5cfa928142ac",
+   "name": "Note bd421e",
+   "type": "n8n-nodes-base.stickyNote",
+   "typeVersion": 1,
+   "position": [
+    -2144,
+    -944
+   ],
+   "parameters": {
+    "content": "## WhatsApp Automation — المستقبِل\nبيستقبل من واتساب:\n- حالة كل رسالة: وصلت / انقرت (فتحها) / ما وصلت، مع وقتها\n- ردود الناس وتصنيفها (الكلمات من الإعدادات العامة)\n- موافقة واتساب على الرسائل\nوبيرد تلقائيًا بنص الحملة، وبيبعتلك إشعار على البرنامج\n\n**غيّر VERIFY_TOKEN بعقدة Verify**",
+    "width": 560,
+    "height": 340,
+    "color": 5
+   }
+  },
+  {
+   "id": "5b14f28d-d140-4054-bd57-a68f03a0fceb",
+   "name": "Chat In",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    -1424,
+    -304
+   ],
+   "parameters": {
+    "jsCode": "// تسجيل رسائل الناس بصندوق المحادثات (أول إشي، قبل الرد التلقائي)\nconst out = [];\nfor (const it of $input.all()) {\n  const m = it.json;\n  if (m.kind !== 'message' || !m.from) continue;\n  const t = Number(m.ts) ? DateTime.fromSeconds(Number(m.ts)) : $now;\n  const text = String(m.text || '');\n  out.push({ json: {\n    wa_id: String(m.from).replace(/\\D/g, ''),\n    name: String(m.profile || ''),\n    dir: 'in',\n    kind: m.payload ? 'button' : (/^\\[[a-z_]+\\]/.test(text) ? 'media' : 'text'),\n    text: text.slice(0, 4000),\n    at: t.setZone('__TIMEZONE__').toFormat('yyyy-MM-dd HH:mm:ss'),\n    wamid: String(m.id || ('in-' + m.from + '-' + (m.ts || Date.now()))),\n    status: 'received',\n    seen: ''\n  } });\n}\nreturn out;\n"
+   }
+  },
+  {
+   "id": "7430f455-c070-4333-a9f2-8f55e2ff1537",
+   "name": "Save Chat In",
+   "type": "n8n-nodes-base.dataTable",
+   "typeVersion": 1,
+   "position": [
+    -1200,
+    -304
+   ],
+   "parameters": {
+    "resource": "row",
+    "operation": "upsert",
+    "dataTableId": {
+     "__rl": true,
+     "value": "__TABLE_CHATS__",
+     "mode": "id",
+     "cachedResultName": "WAC Chats"
+    },
+    "columns": {
+     "mappingMode": "defineBelow",
+     "value": {
+      "wa_id": "={{ ($json.wa_id) == null ? '' : String($json.wa_id) }}",
+      "name": "={{ ($json.name) == null ? '' : String($json.name) }}",
+      "dir": "={{ ($json.dir) == null ? '' : String($json.dir) }}",
+      "kind": "={{ ($json.kind) == null ? '' : String($json.kind) }}",
+      "text": "={{ ($json.text) == null ? '' : String($json.text) }}",
+      "at": "={{ ($json.at) == null ? '' : String($json.at) }}",
+      "wamid": "={{ ($json.wamid) == null ? '' : String($json.wamid) }}",
+      "status": "={{ ($json.status) == null ? '' : String($json.status) }}",
+      "seen": "={{ ($json.seen) == null ? '' : String($json.seen) }}"
+     },
+     "matchingColumns": [],
+     "schema": [
+      {
+       "id": "wa_id",
+       "displayName": "wa_id",
+       "required": false,
+       "defaultMatch": false,
+       "display": true,
+       "type": "string",
+       "readOnly": false,
+       "removed": false
+      },
+      {
+       "id": "name",
+       "displayName": "name",
+       "required": false,
+       "defaultMatch": false,
+       "display": true,
+       "type": "string",
+       "readOnly": false,
+       "removed": false
+      },
+      {
+       "id": "dir",
+       "displayName": "dir",
+       "required": false,
+       "defaultMatch": false,
+       "display": true,
+       "type": "string",
+       "readOnly": false,
+       "removed": false
+      },
+      {
+       "id": "kind",
+       "displayName": "kind",
+       "required": false,
+       "defaultMatch": false,
+       "display": true,
+       "type": "string",
+       "readOnly": false,
+       "removed": false
+      },
+      {
+       "id": "text",
+       "displayName": "text",
+       "required": false,
+       "defaultMatch": false,
+       "display": true,
+       "type": "string",
+       "readOnly": false,
+       "removed": false
+      },
+      {
+       "id": "at",
+       "displayName": "at",
+       "required": false,
+       "defaultMatch": false,
+       "display": true,
+       "type": "string",
+       "readOnly": false,
+       "removed": false
+      },
+      {
+       "id": "wamid",
+       "displayName": "wamid",
+       "required": false,
+       "defaultMatch": false,
+       "display": true,
+       "type": "string",
+       "readOnly": false,
+       "removed": false
+      },
+      {
+       "id": "status",
+       "displayName": "status",
+       "required": false,
+       "defaultMatch": false,
+       "display": true,
+       "type": "string",
+       "readOnly": false,
+       "removed": false
+      },
+      {
+       "id": "seen",
+       "displayName": "seen",
+       "required": false,
+       "defaultMatch": false,
+       "display": true,
+       "type": "string",
+       "readOnly": false,
+       "removed": false
+      }
+     ],
+     "attemptToConvertTypes": false,
+     "convertFieldsToString": false
+    },
+    "options": {},
+    "matchType": "allConditions",
+    "filters": {
+     "conditions": [
+      {
+       "keyName": "wamid",
+       "condition": "eq",
+       "keyValue": "={{ ($json.wamid) == null ? '' : String($json.wamid) }}"
+      }
+     ]
+    }
+   },
+   "alwaysOutputData": true
+  },
+  {
+   "id": "4cdc8cfe-05ac-4d79-876c-77ad938530cc",
+   "name": "Read Contacts U",
+   "type": "n8n-nodes-base.dataTable",
+   "typeVersion": 1,
+   "position": [
+    -992,
+    -304
+   ],
+   "parameters": {
+    "resource": "row",
+    "operation": "get",
+    "dataTableId": {
+     "__rl": true,
+     "value": "__TABLE_CONTACTS__",
+     "mode": "id",
+     "cachedResultName": "Contacts"
+    },
+    "returnAll": true
+   },
+   "executeOnce": true,
+   "alwaysOutputData": true
+  },
+  {
+   "id": "f75cc5b1-b5ed-4daa-992f-4d07bb5bca63",
+   "name": "Chat Status",
+   "type": "n8n-nodes-base.dataTable",
+   "typeVersion": 1,
+   "position": [
+    -976,
+    -400
+   ],
+   "parameters": {
+    "resource": "row",
+    "operation": "update",
+    "dataTableId": {
+     "__rl": true,
+     "value": "__TABLE_CHATS__",
+     "mode": "id",
+     "cachedResultName": "WAC Chats"
+    },
+    "columns": {
+     "mappingMode": "defineBelow",
+     "value": {
+      "status": "={{ ['delivered', 'read'].includes($json.delivery) ? $json.delivery : (String($json.error_code) === '131047' ? 'failed_24h' : ($json.error_code ? 'failed_' + String($json.error_code) : 'failed')) }}"
+     },
+     "matchingColumns": [],
+     "schema": [
+      {
+       "id": "status",
+       "displayName": "status",
+       "required": false,
+       "defaultMatch": false,
+       "display": true,
+       "type": "string",
+       "readOnly": false,
+       "removed": false
+      }
+     ],
+     "attemptToConvertTypes": false,
+     "convertFieldsToString": false
+    },
+    "options": {},
+    "matchType": "allConditions",
+    "filters": {
+     "conditions": [
+      {
+       "keyName": "wamid",
+       "condition": "eq",
+       "keyValue": "={{ ($json.wamid) == null ? '' : String($json.wamid) }}"
+      },
+      {
+       "keyName": "status",
+       "condition": "neq",
+       "keyValue": "={{ $json.delivery === 'delivered' ? 'read' : '__none__' }}"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "769bd222-5f93-4843-9d10-4799f65dba8b",
+   "name": "Log Auto Reply",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    128,
+    -144
+   ],
+   "parameters": {
+    "jsCode": "// تسجيل الرد التلقائي بصندوق المحادثات\nconst stamp = $now.setZone('__TIMEZONE__').toFormat('yyyy-MM-dd HH:mm:ss');\nconst src = $('Build Reply').all();\nconst out = [];\n$input.all().forEach((it, i) => {\n  const sj = (src[i] || {}).json || {};\n  const p = sj.payload || {};\n  if (!p.to) return;\n  const ok = !!(it.json.messages && it.json.messages[0]);\n  out.push({ json: { wa_id: String(p.to).replace(/\\D/g, ''), name: '', dir: 'out', kind: 'auto',\n    text: String((p.text || {}).body || '').slice(0, 4000), at: stamp,\n    wamid: ok ? String(it.json.messages[0].id) : 'fail-' + Date.now() + '-' + i, status: ok ? 'sent' : 'failed', seen: '1', campaign: String(sj.campaign || '') } });\n});\nreturn out;\n"
+   }
+  },
+  {
+   "id": "906ef8cd-99ea-4b4e-93b1-03c6cebad6df",
+   "name": "Save Auto Reply",
+   "type": "n8n-nodes-base.dataTable",
+   "typeVersion": 1,
+   "position": [
+    352,
+    -144
+   ],
+   "parameters": {
+    "resource": "row",
+    "operation": "insert",
+    "dataTableId": {
+     "__rl": true,
+     "value": "__TABLE_CHATS__",
+     "mode": "id",
+     "cachedResultName": "WAC Chats"
+    },
+    "columns": {
+     "mappingMode": "defineBelow",
+     "value": {
+      "wa_id": "={{ ($json.wa_id) == null ? '' : String($json.wa_id) }}",
+      "name": "={{ ($json.name) == null ? '' : String($json.name) }}",
+      "dir": "={{ ($json.dir) == null ? '' : String($json.dir) }}",
+      "kind": "={{ ($json.kind) == null ? '' : String($json.kind) }}",
+      "text": "={{ ($json.text) == null ? '' : String($json.text) }}",
+      "at": "={{ ($json.at) == null ? '' : String($json.at) }}",
+      "wamid": "={{ ($json.wamid) == null ? '' : String($json.wamid) }}",
+      "status": "={{ ($json.status) == null ? '' : String($json.status) }}",
+      "seen": "={{ ($json.seen) == null ? '' : String($json.seen) }}",
+      "campaign": "={{ ($json.campaign) == null ? '' : String($json.campaign) }}"
+     },
+     "matchingColumns": [],
+     "schema": [
+      {
+       "id": "wa_id",
+       "displayName": "wa_id",
+       "required": false,
+       "defaultMatch": false,
+       "display": true,
+       "type": "string",
+       "readOnly": false,
+       "removed": false
+      },
+      {
+       "id": "name",
+       "displayName": "name",
+       "required": false,
+       "defaultMatch": false,
+       "display": true,
+       "type": "string",
+       "readOnly": false,
+       "removed": false
+      },
+      {
+       "id": "dir",
+       "displayName": "dir",
+       "required": false,
+       "defaultMatch": false,
+       "display": true,
+       "type": "string",
+       "readOnly": false,
+       "removed": false
+      },
+      {
+       "id": "kind",
+       "displayName": "kind",
+       "required": false,
+       "defaultMatch": false,
+       "display": true,
+       "type": "string",
+       "readOnly": false,
+       "removed": false
+      },
+      {
+       "id": "text",
+       "displayName": "text",
+       "required": false,
+       "defaultMatch": false,
+       "display": true,
+       "type": "string",
+       "readOnly": false,
+       "removed": false
+      },
+      {
+       "id": "at",
+       "displayName": "at",
+       "required": false,
+       "defaultMatch": false,
+       "display": true,
+       "type": "string",
+       "readOnly": false,
+       "removed": false
+      },
+      {
+       "id": "wamid",
+       "displayName": "wamid",
+       "required": false,
+       "defaultMatch": false,
+       "display": true,
+       "type": "string",
+       "readOnly": false,
+       "removed": false
+      },
+      {
+       "id": "status",
+       "displayName": "status",
+       "required": false,
+       "defaultMatch": false,
+       "display": true,
+       "type": "string",
+       "readOnly": false,
+       "removed": false
+      },
+      {
+       "id": "seen",
+       "displayName": "seen",
+       "required": false,
+       "defaultMatch": false,
+       "display": true,
+       "type": "string",
+       "readOnly": false,
+       "removed": false
+      },
+      {
+       "id": "campaign",
+       "displayName": "campaign",
+       "required": false,
+       "defaultMatch": false,
+       "display": true,
+       "type": "string",
+       "readOnly": false,
+       "removed": false
+      }
+     ],
+     "attemptToConvertTypes": false,
+     "convertFieldsToString": false
+    },
+    "options": {}
+   }
+  },
+  {
+   "id": "f766b841-d89f-44c8-b41a-d12d7668a516",
+   "name": "Read Contacts R",
+   "type": "n8n-nodes-base.dataTable",
+   "typeVersion": 1,
+   "position": [
+    -1424,
+    -144
+   ],
+   "parameters": {
+    "resource": "row",
+    "operation": "get",
+    "dataTableId": {
+     "__rl": true,
+     "value": "__TABLE_CONTACTS__",
+     "mode": "id",
+     "cachedResultName": "Contacts"
+    },
+    "returnAll": true
+   },
+   "executeOnce": true,
+   "alwaysOutputData": true
+  },
+  {
+   "id": "4a0a942f-e377-4b34-b07d-fb9a4240cc49",
+   "name": "Read Campaigns R",
+   "type": "n8n-nodes-base.dataTable",
+   "typeVersion": 1,
+   "position": [
+    -1200,
+    -144
+   ],
+   "parameters": {
+    "resource": "row",
+    "operation": "get",
+    "dataTableId": {
+     "__rl": true,
+     "value": "__TABLE_CAMPAIGNS__",
+     "mode": "id",
+     "cachedResultName": "WAC Campaigns"
+    },
+    "returnAll": true
+   },
+   "executeOnce": true,
+   "alwaysOutputData": true
+  },
+  {
+   "id": "3cab31b9-a30c-4175-b08d-47caf85da3e3",
+   "name": "Template Event",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    -1424,
+    240
+   ],
+   "parameters": {
+    "jsCode": "// واتساب بعتلنا نتيجة مراجعة رسالة (موافقة / رفض)\nconst out = [];\nfor (const it of $input.all()) {\n  const t = it.json;\n  if (t.kind !== 'tpl' || !t.template_id) continue;\n  out.push({ json: { template_id: t.template_id, status: t.status, reason: t.reason } });\n}\nreturn out;\n"
+   }
+  },
+  {
+   "id": "8cff2b92-5c1d-4bde-a689-14d268787341",
+   "name": "Save Template Event",
+   "type": "n8n-nodes-base.dataTable",
+   "typeVersion": 1,
+   "position": [
+    -1200,
+    240
+   ],
+   "parameters": {
+    "resource": "row",
+    "operation": "update",
+    "dataTableId": {
+     "__rl": true,
+     "value": "__TABLE_MESSAGES__",
+     "mode": "id",
+     "cachedResultName": "Messages"
+    },
+    "columns": {
+     "mappingMode": "defineBelow",
+     "value": {
+      "status": "={{ ($json.status) == null ? '' : String($json.status) }}",
+      "reason": "={{ ($json.reason) == null ? '' : String($json.reason) }}"
+     },
+     "matchingColumns": [],
+     "schema": [
+      {
+       "id": "status",
+       "displayName": "status",
+       "required": false,
+       "defaultMatch": false,
+       "display": true,
+       "type": "string",
+       "readOnly": false,
+       "removed": false
+      },
+      {
+       "id": "reason",
+       "displayName": "reason",
+       "required": false,
+       "defaultMatch": false,
+       "display": true,
+       "type": "string",
+       "readOnly": false,
+       "removed": false
+      }
+     ],
+     "attemptToConvertTypes": false,
+     "convertFieldsToString": false
+    },
+    "options": {},
+    "matchType": "allConditions",
+    "filters": {
+     "conditions": [
+      {
+       "keyName": "template_id",
+       "condition": "eq",
+       "keyValue": "={{ ($json.template_id) == null ? '' : String($json.template_id) }}"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "ffe5bfa5-d36d-48b5-ae50-194249371c16",
+   "name": "Read Settings P",
+   "type": "n8n-nodes-base.dataTable",
+   "typeVersion": 1,
+   "position": [
+    -2112,
+    -160
+   ],
+   "parameters": {
+    "resource": "row",
+    "operation": "get",
+    "dataTableId": {
+     "__rl": true,
+     "value": "__TABLE_SETTINGS__",
+     "mode": "id",
+     "cachedResultName": "Settings"
+    },
+    "returnAll": true
+   },
+   "executeOnce": true,
+   "alwaysOutputData": true
+  },
+  {
+   "id": "db9f98d4-d56a-49de-afa0-da3e033007c3",
+   "name": "Wait Status",
+   "type": "n8n-nodes-base.wait",
+   "typeVersion": 1.1,
+   "position": [
+    -1200,
+    -640
+   ],
+   "parameters": {
+    "resume": "timeInterval",
+    "amount": 45,
+    "unit": "seconds"
+   },
+   "webhookId": "4c32b75d-e8c6-4893-b899-6eb9912b67ff"
+  },
+  {
+   "id": "99357c11-f316-4c3c-8d23-3e2968f04d4b",
+   "name": "Status Type",
+   "type": "n8n-nodes-base.switch",
+   "typeVersion": 3.2,
+   "position": [
+    -976,
+    -640
+   ],
+   "parameters": {
+    "rules": {
+     "values": [
+      {
+       "conditions": {
+        "options": {
+         "caseSensitive": true,
+         "leftValue": "",
+         "typeValidation": "strict",
+         "version": 2
+        },
+        "conditions": [
+         {
+          "id": "d73a5258-3ae5-44dc-8e67-85c8ed5cf4fd",
+          "leftValue": "={{ $json.st }}",
+          "rightValue": "delivered",
+          "operator": {
+           "type": "string",
+           "operation": "equals"
+          }
+         }
+        ],
+        "combinator": "and"
+       },
+       "renameOutput": true,
+       "outputKey": "delivered"
+      },
+      {
+       "conditions": {
+        "options": {
+         "caseSensitive": true,
+         "leftValue": "",
+         "typeValidation": "strict",
+         "version": 2
+        },
+        "conditions": [
+         {
+          "id": "a494b432-b885-4084-a441-725a553b774d",
+          "leftValue": "={{ $json.st }}",
+          "rightValue": "read",
+          "operator": {
+           "type": "string",
+           "operation": "equals"
+          }
+         }
+        ],
+        "combinator": "and"
+       },
+       "renameOutput": true,
+       "outputKey": "read"
+      },
+      {
+       "conditions": {
+        "options": {
+         "caseSensitive": true,
+         "leftValue": "",
+         "typeValidation": "strict",
+         "version": 2
+        },
+        "conditions": [
+         {
+          "id": "271f438b-0bd5-4ef2-b68d-4bc25ef52f2d",
+          "leftValue": "={{ $json.st }}",
+          "rightValue": "failed",
+          "operator": {
+           "type": "string",
+           "operation": "equals"
+          }
+         }
+        ],
+        "combinator": "and"
+       },
+       "renameOutput": true,
+       "outputKey": "failed"
+      }
+     ]
+    },
+    "options": {
+     "fallbackOutput": "extra"
+    }
+   }
+  },
+  {
+   "id": "e27980bb-b76c-42d6-bc26-0101dc8d2ae5",
+   "name": "Update Delivered",
+   "type": "n8n-nodes-base.dataTable",
+   "typeVersion": 1,
+   "position": [
+    -752,
+    -800
+   ],
+   "parameters": {
+    "resource": "row",
+    "operation": "update",
+    "dataTableId": {
+     "__rl": true,
+     "value": "__TABLE_CONTACTS__",
+     "mode": "id",
+     "cachedResultName": "Contacts"
+    },
+    "columns": {
+     "mappingMode": "defineBelow",
+     "value": {
+      "delivery": "delivered",
+      "delivered_at": "={{ ($json.at) == null ? '' : String($json.at) }}"
+     },
+     "matchingColumns": [],
+     "schema": [
+      {
+       "id": "delivery",
+       "displayName": "delivery",
+       "required": false,
+       "defaultMatch": false,
+       "display": true,
+       "type": "string",
+       "readOnly": false,
+       "removed": false
+      },
+      {
+       "id": "delivered_at",
+       "displayName": "delivered_at",
+       "required": false,
+       "defaultMatch": false,
+       "display": true,
+       "type": "string",
+       "readOnly": false,
+       "removed": false
+      }
+     ],
+     "attemptToConvertTypes": false,
+     "convertFieldsToString": false
+    },
+    "options": {},
+    "matchType": "allConditions",
+    "filters": {
+     "conditions": [
+      {
+       "keyName": "wamid",
+       "condition": "eq",
+       "keyValue": "={{ ($json.wamid) == null ? '' : String($json.wamid) }}"
+      },
+      {
+       "keyName": "delivery",
+       "condition": "neq",
+       "keyValue": "read"
+      }
+     ]
+    }
+   },
+   "alwaysOutputData": true
+  },
+  {
+   "id": "9747ad42-286f-42da-bee4-a542e312e9e0",
+   "name": "Update Read",
+   "type": "n8n-nodes-base.dataTable",
+   "typeVersion": 1,
+   "position": [
+    -752,
+    -660
+   ],
+   "parameters": {
+    "resource": "row",
+    "operation": "update",
+    "dataTableId": {
+     "__rl": true,
+     "value": "__TABLE_CONTACTS__",
+     "mode": "id",
+     "cachedResultName": "Contacts"
+    },
+    "columns": {
+     "mappingMode": "defineBelow",
+     "value": {
+      "delivery": "read",
+      "read_at": "={{ ($json.at) == null ? '' : String($json.at) }}"
+     },
+     "matchingColumns": [],
+     "schema": [
+      {
+       "id": "delivery",
+       "displayName": "delivery",
+       "required": false,
+       "defaultMatch": false,
+       "display": true,
+       "type": "string",
+       "readOnly": false,
+       "removed": false
+      },
+      {
+       "id": "read_at",
+       "displayName": "read_at",
+       "required": false,
+       "defaultMatch": false,
+       "display": true,
+       "type": "string",
+       "readOnly": false,
+       "removed": false
+      }
+     ],
+     "attemptToConvertTypes": false,
+     "convertFieldsToString": false
+    },
+    "options": {},
+    "matchType": "allConditions",
+    "filters": {
+     "conditions": [
+      {
+       "keyName": "wamid",
+       "condition": "eq",
+       "keyValue": "={{ ($json.wamid) == null ? '' : String($json.wamid) }}"
+      }
+     ]
+    }
+   },
+   "alwaysOutputData": true
+  },
+  {
+   "id": "4850fe1e-5776-426e-aa20-438467000932",
+   "name": "Update Failed",
+   "type": "n8n-nodes-base.dataTable",
+   "typeVersion": 1,
+   "position": [
+    -752,
+    -520
+   ],
+   "parameters": {
+    "resource": "row",
+    "operation": "update",
+    "dataTableId": {
+     "__rl": true,
+     "value": "__TABLE_CONTACTS__",
+     "mode": "id",
+     "cachedResultName": "Contacts"
+    },
+    "columns": {
+     "mappingMode": "defineBelow",
+     "value": {
+      "delivery": "={{ ($json.delivery) == null ? '' : String($json.delivery) }}",
+      "error_code": "={{ ($json.error_code) == null ? '' : String($json.error_code) }}",
+      "retry_after": "={{ ($json.retry_after) == null ? '' : String($json.retry_after) }}",
+      "notes": "={{ ($json.notes) == null ? '' : String($json.notes) }}",
+      "updated_at": "={{ ($json.updated_at) == null ? '' : String($json.updated_at) }}"
+     },
+     "matchingColumns": [],
+     "schema": [
+      {
+       "id": "delivery",
+       "displayName": "delivery",
+       "required": false,
+       "defaultMatch": false,
+       "display": true,
+       "type": "string",
+       "readOnly": false,
+       "removed": false
+      },
+      {
+       "id": "error_code",
+       "displayName": "error_code",
+       "required": false,
+       "defaultMatch": false,
+       "display": true,
+       "type": "string",
+       "readOnly": false,
+       "removed": false
+      },
+      {
+       "id": "retry_after",
+       "displayName": "retry_after",
+       "required": false,
+       "defaultMatch": false,
+       "display": true,
+       "type": "string",
+       "readOnly": false,
+       "removed": false
+      },
+      {
+       "id": "notes",
+       "displayName": "notes",
+       "required": false,
+       "defaultMatch": false,
+       "display": true,
+       "type": "string",
+       "readOnly": false,
+       "removed": false
+      },
+      {
+       "id": "updated_at",
+       "displayName": "updated_at",
+       "required": false,
+       "defaultMatch": false,
+       "display": true,
+       "type": "string",
+       "readOnly": false,
+       "removed": false
+      }
+     ],
+     "attemptToConvertTypes": false,
+     "convertFieldsToString": false
+    },
+    "options": {},
+    "matchType": "allConditions",
+    "filters": {
+     "conditions": [
+      {
+       "keyName": "wamid",
+       "condition": "eq",
+       "keyValue": "={{ ($json.wamid) == null ? '' : String($json.wamid) }}"
+      }
+     ]
+    }
+   },
+   "alwaysOutputData": true
+  },
+  {
+   "id": "8030ae41-f999-4a84-8bdd-d26bb6acbb56",
+   "name": "Read Campaigns U",
+   "type": "n8n-nodes-base.dataTable",
+   "typeVersion": 1,
+   "position": [
+    -768,
+    -304
+   ],
+   "parameters": {
+    "resource": "row",
+    "operation": "get",
+    "dataTableId": {
+     "__rl": true,
+     "value": "__TABLE_CAMPAIGNS__",
+     "mode": "id",
+     "cachedResultName": "WAC Campaigns"
+    },
+    "returnAll": true
+   },
+   "executeOnce": true,
+   "alwaysOutputData": true
+  },
+  {
+   "id": "6dbf1cae-5e1b-4312-98a2-ecb8d53028cf",
+   "name": "Message Notes",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    -544,
+    -304
+   ],
+   "parameters": {
+    "jsCode": "// إشعار لكل رسالة بتوصلنا من الناس (على تلفونك من البرنامج، وعلى واتساب إذا مشغّل)\nconst S = {};\nfor (const it of $('Read Settings P').all()) { const r = it.json; if (r.key) S[String(r.key).trim()] = r.value; }\nconst last9 = p => String(p || '').replace(/\\D/g, '').slice(-9);\nconst camps = {};\nfor (const it of $('Read Campaigns U').all()) { const c = it.json; if (c.cid) camps[String(c.cid)] = String(c.name || ''); }\nconst people = new Map();\nfor (const it of $('Read Contacts U').all()) {\n  const c = it.json;\n  for (const k of new Set([last9(c.wa_id), last9(c.phone)])) { if (!k) continue; if (!people.has(k)) people.set(k, []); people.get(k).push(c); }\n}\nconst pay = {};\nfor (const it of $('Parse Events').all()) { const m = it.json; if (m.kind === 'message') pay[String(m.id)] = String(m.payload || ''); }\nconst mine = new Set(String(S.alert_numbers || '').split(/[,\\s]+/).map(x => last9(x)).filter(x => x.length === 9));\nconst out = [];\nfor (const it of $('Chat In').all()) {\n  const m = it.json;\n  const wa = String(m.wa_id || '');\n  const rows = people.get(last9(wa)) || [];\n  const latest = rows.slice().sort((a, b) => String(b.sent_at || '').localeCompare(String(a.sent_at || '')))[0];\n  const name = String((rows.find(r => String(r.name || '').trim()) || {}).name || '').trim() || String(m.name || '').trim();\n  const who = name || ('+' + wa);\n  const [pk, pc] = String(pay[String(m.wamid || '')] || '').split('|');\n  const cid = pc && camps[pc] !== undefined ? pc : String((latest || {}).campaign || '');\n  const camp = camps[cid] ? `حملة «${camps[cid]}»` : '';\n  const text = String(m.text || '').replace(/\\s+/g, ' ').trim();\n  let kind = 'msg', title = `💬 ${who}`, body = text, wa_text = '';\n  const P = String(pk || '').toUpperCase();\n  if (P === 'INTERESTED') { kind = 'lead'; title = `🙋 ${who} بده التفاصيل`; body = camp ? `كبس «${text || 'بدي التفاصيل'}» · ${camp}` : `كبس «${text || 'بدي التفاصيل'}»`;\n    wa_text = `شخص جديد مهتم${camp ? ' (' + camp + ')' : ''}: ${who} (+${wa}). وصله الرد التلقائي`; }\n  else if (P === 'STOP') { kind = 'stop'; title = `🚫 ${who} مش مهتم`; body = camp || 'كبس «مش مهتم»'; }\n  else {\n    if (!rows.length) title = `💬 رقم جديد: ${who}`;\n    wa_text = rows.length ? `رسالة جديدة${camp ? ' (' + camp + ')' : ''} من ${who} (+${wa}): ${text}` : `رسالة من رقم مش بالقائمة: ${who} (+${wa}): ${text}`;\n  }\n  out.push({ json: { kind, key: 'wa-' + wa, throttle: kind === 'msg', self: mine.has(last9(wa)), title: title.slice(0, 120), body: body.slice(0, 250),\n    link: 'chat=' + wa, wa_text: wa_text.replace(/\\s+/g, ' ').slice(0, 900) } });\n}\nreturn out;\n"
+   }
+  },
+  {
+   "id": "bdaa6907-6ebb-4056-b106-5dec27b87b82",
+   "name": "Notify R",
+   "type": "n8n-nodes-base.executeWorkflow",
+   "typeVersion": 1.1,
+   "position": [
+    -320,
+    -304
+   ],
+   "parameters": {
+    "source": "database",
+    "workflowId": {
+     "__rl": true,
+     "value": "__NOTIFY_WORKFLOW_ID__",
+     "mode": "id"
+    },
+    "mode": "once",
+    "options": {
+     "waitForSubWorkflow": false
+    }
+   },
+   "onError": "continueRegularOutput"
+  },
+  {
+   "id": "bf587179-dd37-48f9-86ab-6d4711442e38",
+   "name": "Template Notes",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    -976,
+    240
+   ],
+   "parameters": {
+    "jsCode": "// إشعار لما واتساب يوافق أو يرفض رسالة حملة\nlet names = {};\ntry { for (const it of $('Read Campaigns R').all()) { const c = it.json; if (c.cid) names[String(c.cid)] = String(c.name || ''); } } catch (e) {}\nconst WHY = { INVALID_FORMAT: 'صيغة الرسالة مش مقبولة', TAG_CONTENT_MISMATCH: 'نوع الرسالة مش مطابق', SCAM: 'اعتبرها مشبوهة', ABUSIVE_CONTENT: 'اعتبرها مخالفة', PROMOTIONAL: 'اعتبرها إعلان زيادة' };\nconst out = [];\nfor (const it of $input.all()) {\n  const m = it.json;\n  const st = String(m.status || '').toUpperCase();\n  if (!['APPROVED', 'REJECTED', 'PAUSED', 'DISABLED'].includes(st)) continue;\n  const nm = names[String(m.campaign || '')] || 'حملة';\n  const ver = m.slot ? ` (النسخة ${m.slot})` : '';\n  const ok = st === 'APPROVED';\n  out.push({ json: { kind: 'tpl', key: 'tpl-' + String(m.template_id || ''),\n    title: ok ? `✅ واتساب وافق على رسالة «${nm}»` : `❌ واتساب ${st === 'REJECTED' ? 'رفض' : 'وقّف'} رسالة «${nm}»`,\n    body: ok ? `الرسالة${ver} جاهزة. إذا الحملة شغّالة بتبلش تبعت لحالها.` : `الرسالة${ver}: ${WHY[m.reason] || m.reason || 'بدون سبب'}. اكتب نسخة جديدة.`,\n    link: 'camp=' + String(m.campaign || ''), wa_text: '' } });\n}\nreturn out;\n"
+   }
+  },
+  {
+   "id": "e2aadcfe-6ef9-4eee-b67b-59dc965275b2",
+   "name": "Notify T",
+   "type": "n8n-nodes-base.executeWorkflow",
+   "typeVersion": 1.1,
+   "position": [
+    -752,
+    240
+   ],
+   "parameters": {
+    "source": "database",
+    "workflowId": {
+     "__rl": true,
+     "value": "__NOTIFY_WORKFLOW_ID__",
+     "mode": "id"
+    },
+    "mode": "once",
+    "options": {
+     "waitForSubWorkflow": false
+    }
+   },
+   "onError": "continueRegularOutput"
+  },
+  {
+   "id": "28303a78-660d-491c-a1cf-c202f5bec1d1",
+   "name": "Chat Status Now",
+   "type": "n8n-nodes-base.dataTable",
+   "typeVersion": 1,
+   "position": [
+    -1200,
+    -860
+   ],
+   "parameters": {
+    "resource": "row",
+    "operation": "update",
+    "dataTableId": {
+     "__rl": true,
+     "value": "__TABLE_CHATS__",
+     "mode": "id",
+     "cachedResultName": "WAC Chats"
+    },
+    "columns": {
+     "mappingMode": "defineBelow",
+     "value": {
+      "status": "={{ ['delivered', 'read'].includes($json.delivery) ? $json.delivery : (String($json.error_code) === '131047' ? 'failed_24h' : ($json.error_code ? 'failed_' + String($json.error_code) : 'failed')) }}"
+     },
+     "matchingColumns": [],
+     "schema": [
+      {
+       "id": "status",
+       "displayName": "status",
+       "required": false,
+       "defaultMatch": false,
+       "display": true,
+       "type": "string",
+       "readOnly": false,
+       "removed": false
+      }
+     ],
+     "attemptToConvertTypes": false,
+     "convertFieldsToString": false
+    },
+    "options": {},
+    "matchType": "allConditions",
+    "filters": {
+     "conditions": [
+      {
+       "keyName": "wamid",
+       "condition": "eq",
+       "keyValue": "={{ ($json.wamid) == null ? '' : String($json.wamid) }}"
+      },
+      {
+       "keyName": "status",
+       "condition": "neq",
+       "keyValue": "={{ $json.delivery === 'delivered' ? 'read' : '__none__' }}"
+      }
+     ]
+    }
+   }
+  }
+ ],
+ "connections": {
+  "Meta Verify (GET)": {
+   "main": [
+    [
+     {
+      "node": "Verify",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Verify": {
+   "main": [
+    [
+     {
+      "node": "Respond",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "WhatsApp Events (POST)": {
+   "main": [
+    [
+     {
+      "node": "Config",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Config": {
+   "main": [
+    [
+     {
+      "node": "Read Settings P",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Parse Events": {
+   "main": [
+    [
+     {
+      "node": "Is Status?",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Map Status": {
+   "main": [
+    [
+     {
+      "node": "Chat Status Now",
+      "type": "main",
+      "index": 0
+     },
+     {
+      "node": "Wait Status",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Classify": {
+   "main": [
+    [
+     {
+      "node": "Update Response",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Update Response": {
+   "main": [
+    [
+     {
+      "node": "Read Settings",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Read Settings": {
+   "main": [
+    [
+     {
+      "node": "Build Reply",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Build Reply": {
+   "main": [
+    [
+     {
+      "node": "Send Reply",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Is Status?": {
+   "main": [
+    [
+     {
+      "node": "Map Status",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "Chat In",
+      "type": "main",
+      "index": 0
+     },
+     {
+      "node": "Read Contacts R",
+      "type": "main",
+      "index": 0
+     },
+     {
+      "node": "Template Event",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Chat In": {
+   "main": [
+    [
+     {
+      "node": "Save Chat In",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Save Chat In": {
+   "main": [
+    [
+     {
+      "node": "Read Contacts U",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Read Contacts U": {
+   "main": [
+    [
+     {
+      "node": "Read Campaigns U",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Send Reply": {
+   "main": [
+    [
+     {
+      "node": "Log Auto Reply",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Log Auto Reply": {
+   "main": [
+    [
+     {
+      "node": "Save Auto Reply",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Read Contacts R": {
+   "main": [
+    [
+     {
+      "node": "Read Campaigns R",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Read Campaigns R": {
+   "main": [
+    [
+     {
+      "node": "Classify",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Template Event": {
+   "main": [
+    [
+     {
+      "node": "Save Template Event",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Read Settings P": {
+   "main": [
+    [
+     {
+      "node": "Parse Events",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Wait Status": {
+   "main": [
+    [
+     {
+      "node": "Status Type",
+      "type": "main",
+      "index": 0
+     },
+     {
+      "node": "Chat Status",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Status Type": {
+   "main": [
+    [
+     {
+      "node": "Update Delivered",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "Update Read",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "Update Failed",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    []
+   ]
+  },
+  "Read Campaigns U": {
+   "main": [
+    [
+     {
+      "node": "Message Notes",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Message Notes": {
+   "main": [
+    [
+     {
+      "node": "Notify R",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Save Template Event": {
+   "main": [
+    [
+     {
+      "node": "Template Notes",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Template Notes": {
+   "main": [
+    [
+     {
+      "node": "Notify T",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  }
+ },
+ "settings": {
+  "executionOrder": "v1",
+  "timezone": "__TIMEZONE__",
+  "saveManualExecutions": true
+ },
+ "pinData": {}
+}

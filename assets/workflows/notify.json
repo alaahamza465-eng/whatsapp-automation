@@ -1,0 +1,573 @@
+{
+ "name": "WhatsApp Automation — الإشعارات",
+ "nodes": [
+  {
+   "id": "b0c5318e-302d-4b4d-b8f8-b4dafc7317d3",
+   "name": "Notify In",
+   "type": "n8n-nodes-base.executeWorkflowTrigger",
+   "typeVersion": 1.1,
+   "position": [
+    -1200,
+    0
+   ],
+   "parameters": {
+    "inputSource": "passthrough"
+   }
+  },
+  {
+   "id": "969212c6-fd5e-46c0-a51b-f96ad332a9b6",
+   "name": "Read Settings N",
+   "type": "n8n-nodes-base.dataTable",
+   "typeVersion": 1,
+   "position": [
+    -976,
+    0
+   ],
+   "parameters": {
+    "resource": "row",
+    "operation": "get",
+    "dataTableId": {
+     "__rl": true,
+     "value": "__TABLE_SETTINGS__",
+     "mode": "id",
+     "cachedResultName": "Settings"
+    },
+    "returnAll": true
+   },
+   "executeOnce": true,
+   "alwaysOutputData": true
+  },
+  {
+   "id": "77e70583-fab5-491b-bd71-d7f59ac970e2",
+   "name": "Read Push N",
+   "type": "n8n-nodes-base.dataTable",
+   "typeVersion": 1,
+   "position": [
+    -752,
+    0
+   ],
+   "parameters": {
+    "resource": "row",
+    "operation": "get",
+    "dataTableId": {
+     "__rl": true,
+     "value": "__TABLE_PUSH__",
+     "mode": "id",
+     "cachedResultName": "WAC Push"
+    },
+    "returnAll": true
+   },
+   "executeOnce": true,
+   "alwaysOutputData": true
+  },
+  {
+   "id": "dd1a8fa3-cf31-4a15-bc2a-6be3b3f9aaf0",
+   "name": "Plan",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    -528,
+    0
+   ],
+   "parameters": {
+    "jsCode": "// بيقرر لكل إشعار: يحفظه بقائمة الإشعارات، يبعته لأجهزتك، ويبعت تنبيه واتساب إذا هيك اخترت\nconst S = {};\nfor (const it of $('Read Settings N').all()) { const r = it.json; if (r.key) S[String(r.key).trim()] = r.value; }\nconst num = (v, d) => { const n = Number(v); return (v === '' || v === null || v === undefined || isNaN(n)) ? d : n; };\nconst stamp = $now.setZone('__TIMEZONE__').toFormat('yyyy-MM-dd HH:mm:ss');\nconst kinds = new Set(String(S.notify_kinds ?? 'msg,lead,camp,tpl,server').split(',').map(x => x.trim()).filter(Boolean));\nconst sd = $getWorkflowStaticData('global'); sd.t = sd.t || {};\nconst nowMs = Date.now();\nfor (const k of Object.keys(sd.t)) if (nowMs - sd.t[k] > 2 * 86400000) delete sd.t[k];\nconst notes = $('Notify In').all().map(i => i.json).filter(n => n && n.title);\nconst subs = $('Read Push N').all().map(i => i.json).filter(p => /^https:\\/\\//.test(String(p.endpoint || '')) && String(p.dead || '') !== '1');\n// تنبيه واتساب: تلقائي = بس إذا ما في جهاز مشغّل عليه الإشعارات\nconst mode = String(S.alert_whatsapp || 'auto').trim();\nconst waOn = mode === 'on' || (mode === 'auto' && !subs.length);\nconst tpl = String(S.alert_template || '').trim(), pid = String(S.phone_number_id || '').trim();\nconst nums = String(S.alert_numbers || '').split(/[,\\s]+/).map(x => x.replace(/\\D/g, '')).filter(x => x.length >= 10);\nconst waUrl = `https://graph.facebook.com/${String(S.api_version || 'v23.0').trim()}/${pid}/messages`;\nconst thr = num(S.alert_throttle_min, 20) * 60000;\nconst out = [];\nlet push = false;\nfor (const n of notes) {\n  if (!n.force && !kinds.has(String(n.kind || ''))) continue;\n  out.push({ json: { route: 'note', at: stamp, kind: String(n.kind || ''), title: String(n.title).slice(0, 120), body: String(n.body || '').slice(0, 300), link: String(n.link || '') } });\n  const key = String(n.key || '');\n  if (!key || n.force || nowMs - (sd.t['p:' + key] || 0) > 20000) { push = true; if (key) sd.t['p:' + key] = nowMs; }\n  if (!waOn || !tpl || !pid || !nums.length || !n.wa_text || n.self) continue;\n  if (n.throttle && key && nowMs - (sd.t['w:' + key] || 0) < thr) continue; // رسائل عادية: تنبيه واحد لنفس الشخص كل فترة\n  if (key) sd.t['w:' + key] = nowMs;\n  const panel = /^https:\\/\\//.test(String(S.panel_url || '')) ? String(S.panel_url).trim() : '__N8N_URL__/webhook/wac';\n  const link = String(n.link || '') ? ` · ${String(n.link).startsWith('chat=') ? 'افتح المحادثة ورد من البرنامج' : 'افتح البرنامج'}: ${panel}#${n.link}` : ` · افتح البرنامج: ${panel}`;\n  const txt = (String(n.wa_text).replace(/[\\n\\t]+/g, ' ').replace(/ {4,}/g, '   ').slice(0, 900 - link.length) + link);\n  for (const to of nums) out.push({ json: { route: 'wa', url: waUrl, payload: { messaging_product: 'whatsapp', to, type: 'template',\n    template: { name: tpl, language: { code: String(S.alert_language || 'ar').trim() }, components: [{ type: 'body', parameters: [{ type: 'text', text: txt }] }] } } } });\n}\n// إشعار للأجهزة (بدون محتوى: الجهاز بيسحب آخر إشعار من البرنامج)\nconst pem = String(S.vapid_private || ''), pub = String(S.vapid_public || '').trim();\nif (push && subs.length && pem.includes('PRIVATE KEY') && pub) {\n  const A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';\n  const b64u = str => { const b = Array.from(str, ch => ch.charCodeAt(0) & 255); let s = '', i = 0;\n    for (; i + 2 < b.length; i += 3) { const v = (b[i] << 16) | (b[i + 1] << 8) | b[i + 2]; s += A[v >> 18 & 63] + A[v >> 12 & 63] + A[v >> 6 & 63] + A[v & 63]; }\n    if (b.length - i === 1) { const v = b[i] << 16; s += A[v >> 18 & 63] + A[v >> 12 & 63]; }\n    else if (b.length - i === 2) { const v = (b[i] << 16) | (b[i + 1] << 8); s += A[v >> 18 & 63] + A[v >> 12 & 63] + A[v >> 6 & 63]; }\n    return s; };\n  const exp = Math.floor(nowMs / 1000) + 12 * 3600;\n  const subj = /^(https:\\/\\/|mailto:)/.test(String(S.vapid_sub || '')) ? String(S.vapid_sub) : '__N8N_URL__';\n  for (const p of subs) {\n    const m = String(p.endpoint).match(/^(https:\\/\\/[^/]+)/);\n    if (!m) continue;\n    const unsigned = b64u(JSON.stringify({ typ: 'JWT', alg: 'ES256' })) + '.' + b64u(JSON.stringify({ aud: m[1], exp, sub: subj }));\n    out.push({ json: { route: 'push', endpoint: String(p.endpoint), unsigned, pem, pub } });\n  }\n}\nreturn out;\n"
+   }
+  },
+  {
+   "id": "9956463e-da01-4678-82f1-fc2eba6b4614",
+   "name": "Which",
+   "type": "n8n-nodes-base.switch",
+   "typeVersion": 3.2,
+   "position": [
+    -304,
+    0
+   ],
+   "parameters": {
+    "rules": {
+     "values": [
+      {
+       "conditions": {
+        "options": {
+         "caseSensitive": true,
+         "leftValue": "",
+         "typeValidation": "strict",
+         "version": 2
+        },
+        "conditions": [
+         {
+          "id": "83decfb8-6bbf-4532-8473-0f28d1374c7e",
+          "leftValue": "={{ $json.route }}",
+          "rightValue": "note",
+          "operator": {
+           "type": "string",
+           "operation": "equals"
+          }
+         }
+        ],
+        "combinator": "and"
+       },
+       "renameOutput": true,
+       "outputKey": "note"
+      },
+      {
+       "conditions": {
+        "options": {
+         "caseSensitive": true,
+         "leftValue": "",
+         "typeValidation": "strict",
+         "version": 2
+        },
+        "conditions": [
+         {
+          "id": "f8b25ea6-1f5e-4e6b-a565-66416fc1f910",
+          "leftValue": "={{ $json.route }}",
+          "rightValue": "push",
+          "operator": {
+           "type": "string",
+           "operation": "equals"
+          }
+         }
+        ],
+        "combinator": "and"
+       },
+       "renameOutput": true,
+       "outputKey": "push"
+      },
+      {
+       "conditions": {
+        "options": {
+         "caseSensitive": true,
+         "leftValue": "",
+         "typeValidation": "strict",
+         "version": 2
+        },
+        "conditions": [
+         {
+          "id": "3dba805a-0306-4c3c-bced-9a4de3f8aee4",
+          "leftValue": "={{ $json.route }}",
+          "rightValue": "wa",
+          "operator": {
+           "type": "string",
+           "operation": "equals"
+          }
+         }
+        ],
+        "combinator": "and"
+       },
+       "renameOutput": true,
+       "outputKey": "wa"
+      }
+     ]
+    },
+    "options": {
+     "fallbackOutput": "extra"
+    }
+   }
+  },
+  {
+   "id": "255e4fcf-5062-4cf9-bab2-c17d9ec78e31",
+   "name": "Save Note",
+   "type": "n8n-nodes-base.dataTable",
+   "typeVersion": 1,
+   "position": [
+    -80,
+    -200
+   ],
+   "parameters": {
+    "resource": "row",
+    "operation": "insert",
+    "dataTableId": {
+     "__rl": true,
+     "value": "__TABLE_NOTES__",
+     "mode": "id",
+     "cachedResultName": "WAC Notes"
+    },
+    "columns": {
+     "mappingMode": "defineBelow",
+     "value": {
+      "at": "={{ ($json.at) == null ? '' : String($json.at) }}",
+      "kind": "={{ ($json.kind) == null ? '' : String($json.kind) }}",
+      "title": "={{ ($json.title) == null ? '' : String($json.title) }}",
+      "body": "={{ ($json.body) == null ? '' : String($json.body) }}",
+      "link": "={{ ($json.link) == null ? '' : String($json.link) }}"
+     },
+     "matchingColumns": [],
+     "schema": [
+      {
+       "id": "at",
+       "displayName": "at",
+       "required": false,
+       "defaultMatch": false,
+       "display": true,
+       "type": "string",
+       "readOnly": false,
+       "removed": false
+      },
+      {
+       "id": "kind",
+       "displayName": "kind",
+       "required": false,
+       "defaultMatch": false,
+       "display": true,
+       "type": "string",
+       "readOnly": false,
+       "removed": false
+      },
+      {
+       "id": "title",
+       "displayName": "title",
+       "required": false,
+       "defaultMatch": false,
+       "display": true,
+       "type": "string",
+       "readOnly": false,
+       "removed": false
+      },
+      {
+       "id": "body",
+       "displayName": "body",
+       "required": false,
+       "defaultMatch": false,
+       "display": true,
+       "type": "string",
+       "readOnly": false,
+       "removed": false
+      },
+      {
+       "id": "link",
+       "displayName": "link",
+       "required": false,
+       "defaultMatch": false,
+       "display": true,
+       "type": "string",
+       "readOnly": false,
+       "removed": false
+      }
+     ],
+     "attemptToConvertTypes": false,
+     "convertFieldsToString": false
+    },
+    "options": {}
+   }
+  },
+  {
+   "id": "071d9b8c-6c14-440a-9895-f4acc6d43a40",
+   "name": "Sign",
+   "type": "n8n-nodes-base.crypto",
+   "typeVersion": 1,
+   "position": [
+    -80,
+    0
+   ],
+   "parameters": {
+    "action": "sign",
+    "value": "={{ $json.unsigned }}",
+    "dataPropertyName": "sig",
+    "algorithm": "sha256",
+    "encoding": "base64",
+    "privateKey": "={{ $json.pem }}"
+   }
+  },
+  {
+   "id": "b99fc1fe-dfb5-43d8-b004-c794afa2544f",
+   "name": "Push Req",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    144,
+    0
+   ],
+   "parameters": {
+    "jsCode": "// تحويل التوقيع لصيغة JWT (ES256) وتجهيز طلب الإشعار\nconst A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';\nconst B = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';\nconst fromB64 = s => { const o = []; let buf = 0, bits = 0; for (const ch of String(s).replace(/[^A-Za-z0-9+/]/g, '')) { buf = ((buf << 6) | B.indexOf(ch)) & 0xffffff; bits += 6; if (bits >= 8) { bits -= 8; o.push((buf >> bits) & 255); } } return o; };\nconst b64u = b => { let s = '', i = 0;\n  for (; i + 2 < b.length; i += 3) { const v = (b[i] << 16) | (b[i + 1] << 8) | b[i + 2]; s += A[v >> 18 & 63] + A[v >> 12 & 63] + A[v >> 6 & 63] + A[v & 63]; }\n  if (b.length - i === 1) { const v = b[i] << 16; s += A[v >> 18 & 63] + A[v >> 12 & 63]; }\n  else if (b.length - i === 2) { const v = (b[i] << 16) | (b[i + 1] << 8); s += A[v >> 18 & 63] + A[v >> 12 & 63] + A[v >> 6 & 63]; }\n  return s; };\n// DER: 30 len 02 rlen r 02 slen s  →  r||s (32 بايت لكل وحدة)\nconst fix = x => { while (x.length > 32 && x[0] === 0) x = x.slice(1); while (x.length < 32) x = [0].concat(x); return x; };\nconst out = [];\nfor (const it of $input.all()) {\n  const j = it.json;\n  const d = fromB64(j.sig || '');\n  let i = 2; if (d[1] & 0x80) i = 2 + (d[1] & 0x7f);\n  if (d[0] !== 0x30 || d[i] !== 0x02) continue;\n  const rl = d[i + 1], r = d.slice(i + 2, i + 2 + rl); i = i + 2 + rl;\n  if (d[i] !== 0x02) continue;\n  const sl = d[i + 1], s = d.slice(i + 2, i + 2 + sl);\n  const jwt = j.unsigned + '.' + b64u(fix(r).concat(fix(s)));\n  out.push({ json: { endpoint: j.endpoint, auth: `vapid t=${jwt}, k=${j.pub}` } });\n}\nreturn out;\n"
+   }
+  },
+  {
+   "id": "ecfaa838-850f-42fb-b7ce-6806bd6a47ff",
+   "name": "Send Push",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4.2,
+   "position": [
+    368,
+    0
+   ],
+   "parameters": {
+    "method": "POST",
+    "url": "={{ $json.endpoint }}",
+    "sendHeaders": true,
+    "headerParameters": {
+     "parameters": [
+      {
+       "name": "Authorization",
+       "value": "={{ $json.auth }}"
+      },
+      {
+       "name": "TTL",
+       "value": "86400"
+      },
+      {
+       "name": "Urgency",
+       "value": "high"
+      },
+      {
+       "name": "Content-Length",
+       "value": "0"
+      }
+     ]
+    },
+    "options": {
+     "response": {
+      "response": {
+       "fullResponse": true,
+       "neverError": true
+      }
+     },
+     "timeout": 15000
+    }
+   },
+   "onError": "continueRegularOutput"
+  },
+  {
+   "id": "21fca5d7-df04-4201-998d-213f8d0e187f",
+   "name": "Push Result",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [
+    592,
+    0
+   ],
+   "parameters": {
+    "jsCode": "// نتيجة الإشعار لكل جهاز: إذا الجهاز لغى الاشتراك (404/410) بنشطبه\nconst src = $('Push Req').all();\nconst stamp = $now.setZone('__TIMEZONE__').toFormat('yyyy-MM-dd HH:mm:ss');\nreturn $input.all().map((it, i) => {\n  const r = it.json || {};\n  const code = Number(r.statusCode || (r.error && (r.error.status || r.error.httpCode)) || 0);\n  return { json: { endpoint: String(((src[i] || {}).json || {}).endpoint || ''), dead: [404, 410].includes(code) ? '1' : '', last_code: String(code || 'err'), last_at: stamp } };\n}).filter(x => x.json.endpoint);\n"
+   }
+  },
+  {
+   "id": "59012004-bf53-43bf-8395-006bd5d4a415",
+   "name": "Mark Push",
+   "type": "n8n-nodes-base.dataTable",
+   "typeVersion": 1,
+   "position": [
+    816,
+    0
+   ],
+   "parameters": {
+    "resource": "row",
+    "operation": "update",
+    "dataTableId": {
+     "__rl": true,
+     "value": "__TABLE_PUSH__",
+     "mode": "id",
+     "cachedResultName": "WAC Push"
+    },
+    "columns": {
+     "mappingMode": "defineBelow",
+     "value": {
+      "dead": "={{ ($json.dead) == null ? '' : String($json.dead) }}",
+      "last_code": "={{ ($json.last_code) == null ? '' : String($json.last_code) }}",
+      "last_at": "={{ ($json.last_at) == null ? '' : String($json.last_at) }}"
+     },
+     "matchingColumns": [],
+     "schema": [
+      {
+       "id": "dead",
+       "displayName": "dead",
+       "required": false,
+       "defaultMatch": false,
+       "display": true,
+       "type": "string",
+       "readOnly": false,
+       "removed": false
+      },
+      {
+       "id": "last_code",
+       "displayName": "last_code",
+       "required": false,
+       "defaultMatch": false,
+       "display": true,
+       "type": "string",
+       "readOnly": false,
+       "removed": false
+      },
+      {
+       "id": "last_at",
+       "displayName": "last_at",
+       "required": false,
+       "defaultMatch": false,
+       "display": true,
+       "type": "string",
+       "readOnly": false,
+       "removed": false
+      }
+     ],
+     "attemptToConvertTypes": false,
+     "convertFieldsToString": false
+    },
+    "options": {},
+    "matchType": "allConditions",
+    "filters": {
+     "conditions": [
+      {
+       "keyName": "endpoint",
+       "condition": "eq",
+       "keyValue": "={{ ($json.endpoint) == null ? '' : String($json.endpoint) }}"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "id": "cecf43c4-ab8b-4f75-97dd-542c17a92fa1",
+   "name": "Send WA",
+   "type": "n8n-nodes-base.httpRequest",
+   "typeVersion": 4.2,
+   "position": [
+    -80,
+    200
+   ],
+   "parameters": {
+    "method": "POST",
+    "url": "={{ $json.url }}",
+    "authentication": "genericCredentialType",
+    "genericAuthType": "httpHeaderAuth",
+    "options": {
+     "response": {
+      "response": {
+       "neverError": true
+      }
+     }
+    },
+    "sendBody": true,
+    "specifyBody": "json",
+    "jsonBody": "={{ JSON.stringify($json.payload) }}"
+   },
+   "onError": "continueRegularOutput",
+   "credentials": {
+    "httpHeaderAuth": {
+     "id": "__WHATSAPP_CREDENTIAL_ID__",
+     "name": "WhatsApp Token"
+    }
+   }
+  }
+ ],
+ "connections": {
+  "Notify In": {
+   "main": [
+    [
+     {
+      "node": "Read Settings N",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Read Settings N": {
+   "main": [
+    [
+     {
+      "node": "Read Push N",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Read Push N": {
+   "main": [
+    [
+     {
+      "node": "Plan",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Plan": {
+   "main": [
+    [
+     {
+      "node": "Which",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Which": {
+   "main": [
+    [
+     {
+      "node": "Save Note",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "Sign",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    [
+     {
+      "node": "Send WA",
+      "type": "main",
+      "index": 0
+     }
+    ],
+    []
+   ]
+  },
+  "Sign": {
+   "main": [
+    [
+     {
+      "node": "Push Req",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Push Req": {
+   "main": [
+    [
+     {
+      "node": "Send Push",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Send Push": {
+   "main": [
+    [
+     {
+      "node": "Push Result",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  },
+  "Push Result": {
+   "main": [
+    [
+     {
+      "node": "Mark Push",
+      "type": "main",
+      "index": 0
+     }
+    ]
+   ]
+  }
+ },
+ "settings": {
+  "executionOrder": "v1",
+  "timezone": "__TIMEZONE__",
+  "saveManualExecutions": true,
+  "callerPolicy": "workflowsFromSameOwner"
+ },
+ "pinData": {}
+}
